@@ -1,0 +1,126 @@
+# Caddyfile for Production Deployment
+# Replace api.yourdomain.com with your actual domain
+
+# Main API endpoint
+api.yourdomain.com {
+    # Reverse proxy to FastAPI application
+    reverse_proxy fastapi-app:8000 {
+        # Forward real client information
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+        
+        # Health check
+        health_uri /health
+        health_interval 30s
+        health_timeout 5s
+        health_status 2xx
+    }
+
+    # Security headers
+    header {
+        # Enable HSTS (HTTP Strict Transport Security)
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        
+        # Prevent clickjacking attacks
+        X-Frame-Options "SAMEORIGIN"
+        
+        # XSS Protection
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+        
+        # Referrer Policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        
+        # Content Security Policy
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self';"
+        
+        # Permissions Policy
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        
+        # Remove server information
+        -Server
+    }
+
+    # Enable gzip compression
+    encode gzip zstd
+
+    # Rate limiting
+    rate_limit {
+        zone api {
+            key {remote_host}
+            events 100
+            window 1m
+        }
+        
+        zone login {
+            match {
+                path /api/auth/login
+            }
+            key {remote_host}
+            events 5
+            window 5m
+        }
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/api-access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_for 720h
+        }
+        format json
+        level INFO
+    }
+
+    # Handle errors gracefully
+    handle_errors {
+        @5xx expression `{err.status_code} >= 500 && {err.status_code} < 600`
+        rewrite @5xx /errors/5xx.html
+        
+        @4xx expression `{err.status_code} >= 400 && {err.status_code} < 500`
+        rewrite @4xx /errors/4xx.html
+        
+        file_server
+    }
+}
+
+# pgAdmin interface (optional, for database management)
+pgadmin.yourdomain.com {
+    reverse_proxy pgadmin:80
+    
+    # Extra security with basic auth
+    basicauth {
+        # Generate hash: caddy hash-password --plaintext 'your-password'
+        admin $2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNmpkT/5qqR7hx7wNQIqGYbb2
+    }
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/pgadmin-access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+        format json
+    }
+}
+
+# Redirect www to non-www
+www.api.yourdomain.com {
+    redir https://api.yourdomain.com{uri} permanent
+}
+
+# Default/catch-all - redirect to main domain
+:80, :443 {
+    redir https://api.yourdomain.com{uri} permanent
+}

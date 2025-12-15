@@ -1,8 +1,49 @@
+# Python
 venv/
+.venv/
 __pycache__/
-*.pyc
-.DS_Store
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Testing
 .coverage
-.pytest_cache
-htmlcov
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
 .env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Docker
+.dockerignore
+
+# OS
+Thumbs.db
+desktop.ini

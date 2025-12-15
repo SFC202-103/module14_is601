@@ -1,8 +1,6 @@
 # app/auth/redis.py
-import aioredis
-from app.core.config import get_settings
-
-settings = get_settings()
+from redis import asyncio as aioredis
+from app.core.config import settings
 
 async def get_redis():
     if not hasattr(get_redis, "redis"):
