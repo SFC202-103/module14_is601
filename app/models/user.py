@@ -85,6 +85,14 @@ class User(Base):
     is_verified = Column(Boolean, 
                          default=False) # For email verification status
     
+    # Email verification
+    verification_token = Column(String, nullable=True)  # Token for email verification
+    verification_token_expires = Column(DateTime(timezone=True), nullable=True)  # Token expiration
+    
+    # Password reset
+    reset_token = Column(String, nullable=True)  # Token for password reset
+    reset_token_expires = Column(DateTime(timezone=True), nullable=True)  # Token expiration
+    
     # Timestamps - All timezone-aware
     created_at = Column(DateTime(timezone=True), 
                         default=utcnow, 
@@ -160,17 +168,90 @@ class User(Base):
         from app.auth.jwt import get_password_hash
         return get_password_hash(password)
 
+    def generate_verification_token(self) -> str:
+        """
+        Generate a secure email verification token.
+        
+        Returns:
+            str: Verification token
+        """
+        import secrets
+        token = secrets.token_urlsafe(32)
+        self.verification_token = token
+        self.verification_token_expires = utcnow() + timedelta(hours=24)
+        return token
+    
+    def generate_reset_token(self) -> str:
+        """
+        Generate a secure password reset token.
+        
+        Returns:
+            str: Reset token
+        """
+        import secrets
+        token = secrets.token_urlsafe(32)
+        self.reset_token = token
+        self.reset_token_expires = utcnow() + timedelta(hours=1)
+        return token
+    
+    def verify_email_token(self, token: str) -> bool:
+        """
+        Verify email confirmation token.
+        
+        Args:
+            token: Verification token to check
+            
+        Returns:
+            bool: True if token is valid, False otherwise
+        """
+        if not self.verification_token or not self.verification_token_expires:
+            return False
+        
+        if self.verification_token != token:
+            return False
+        
+        if utcnow() > self.verification_token_expires:
+            return False
+        
+        # Token is valid, mark email as verified
+        self.is_verified = True
+        self.verification_token = None
+        self.verification_token_expires = None
+        return True
+    
+    def verify_reset_token(self, token: str) -> bool:
+        """
+        Verify password reset token.
+        
+        Args:
+            token: Reset token to check
+            
+        Returns:
+            bool: True if token is valid, False otherwise
+        """
+        if not self.reset_token or not self.reset_token_expires:
+            return False
+        
+        if self.reset_token != token:
+            return False
+        
+        if utcnow() > self.reset_token_expires:
+            return False
+        
+        return True
+
     @classmethod
-    def register(cls, db, user_data: dict):
+    def register(cls, db, user_data: dict, send_verification_email: bool = True):
         """
         Register a new user.
 
         Args:
             db: SQLAlchemy database session
             user_data: Dictionary containing user registration data
+            send_verification_email: Whether to send verification email
             
         Returns:
-            User: The newly created user instance
+            tuple: (User instance, verification_token)
             
         Raises:
             ValueError: If password is invalid or username/email already exists
@@ -197,8 +278,12 @@ class User(Base):
             is_active=True,
             is_verified=False
         )
+        
+        # Generate verification token
+        verification_token = user.generate_verification_token() if send_verification_email else None
+        
         db.add(user)
-        return user
+        return user, verification_token
 
     @classmethod
     def authenticate(cls, db, username_or_email: str, password: str):

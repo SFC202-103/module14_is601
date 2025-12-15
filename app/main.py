@@ -1,397 +1,224 @@
 """
 FastAPI Main Application Module
 
-This module defines the main FastAPI application, including:
-- Application initialization and configuration
-- API endpoints for user authentication
-- API endpoints for calculation management (BREAD operations)
-- Web routes for HTML templates
-- Database table creation on startup
+This is a professional REST API implementation with:
+- JWT authentication with email verification
+- Modular API routes (auth, calculations)
+- Email confirmation for new users
+- Password reset functionality
+- Web interface for frontend
+- Swagger/ReDoc API documentation
 
-The application follows a RESTful API design with proper separation of concerns:
-- Routes handle HTTP requests and responses
-- Models define database structure
-- Schemas validate request/response data
-- Dependencies handle authentication and database sessions
+Architecture:
+- app/api/ - REST API routes (modular)
+- app/models/ - Database models
+- app/schemas/ - Pydantic validation schemas
+- app/auth/ - Authentication and email services
+- templates/ - Web interface (optional)
 """
 
-from contextlib import asynccontextmanager  # Used for startup/shutdown events
-from datetime import datetime, timezone, timedelta
-from uuid import UUID  # For type validation of UUIDs in path parameters
-from typing import List
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 
-# FastAPI imports
-from fastapi import Body, FastAPI, Depends, HTTPException, status, Request, Form
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles  # For serving static files (CSS, JS)
-from fastapi.templating import Jinja2Templates  # For HTML templates
-
-from sqlalchemy.orm import Session  # SQLAlchemy database session
-
-import uvicorn  # ASGI server for running FastAPI apps
+import uvicorn
 
 # Application imports
-from app.auth.dependencies import get_current_active_user  # Authentication dependency
-from app.models.calculation import Calculation  # Database model for calculations
-from app.models.user import User  # Database model for users
-from app.schemas.calculation import CalculationBase, CalculationResponse, CalculationUpdate  # API request/response schemas
-from app.schemas.token import TokenResponse  # API token schema
-from app.schemas.user import UserCreate, UserResponse, UserLogin  # User schemas
-from app.database import Base, get_db, engine  # Database connection
+from app.database import Base, engine
+from app.core.config import get_settings
+from app.api.auth import router as auth_router
+from app.api.calculations import router as calculations_router
+
+
+settings = get_settings()
 
 
 # ------------------------------------------------------------------------------
-# Create tables on startup using the lifespan event
+# Lifespan Event: Database Initialization
 # ------------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Lifespan context manager for FastAPI.
-    
-    This runs when the application starts and creates all database tables
-    defined in SQLAlchemy models. It's an alternative to using Alembic
-    for simpler applications.
-    
-    Args:
-        app: FastAPI application instance
+    Initialize database tables on startup.
     """
-    print("Creating tables...")
+    print("🚀 Starting FastAPI Calculator API...")
+    print("📊 Creating database tables...")
     Base.metadata.create_all(bind=engine)
-    print("Tables created successfully!")
-    yield  # This is where application runs
-    # Cleanup code would go here (after yield), but we don't need any
+    print("✅ Database tables created successfully!")
+    print(f"📧 Email service configured: {settings.SMTP_HOST}")
+    print(f"🔐 JWT authentication enabled")
+    yield
+    print("👋 Shutting down FastAPI Calculator API...")
 
-# Initialize the FastAPI application with metadata and lifespan
+
+# ------------------------------------------------------------------------------
+# FastAPI Application Initialization
+# ------------------------------------------------------------------------------
 app = FastAPI(
-    title="Calculations API",
-    description="API for managing calculations",
-    version="1.0.0",
-    lifespan=lifespan  # Pass our lifespan context manager
+    title=settings.APP_NAME,
+    description="""
+    ## Professional REST API with JWT Authentication
+    
+    ### Features:
+    - 🔐 JWT Authentication with Email Verification
+    - 📧 Email Confirmation for New Users
+    - 🔑 Password Reset Functionality
+    - 🧮 Calculation Management (BREAD operations)
+    - 📊 User Statistics and Analytics
+    - 🔒 Secure Password Hashing
+    - 🚀 Fast and Scalable
+    
+    ### Getting Started:
+    1. Register a new account at `/api/auth/register`
+    2. Check your email for verification link
+    3. Verify your email at `/api/auth/verify-email?token=YOUR_TOKEN`
+    4. Login at `/api/auth/login`
+    5. Use the access token to make authenticated requests
+    
+    ### Authentication:
+    - All calculation endpoints require authentication
+    - Include token in header: `Authorization: Bearer YOUR_ACCESS_TOKEN`
+    - Access tokens expire after 30 minutes
+    - Use refresh tokens to get new access tokens
+    """,
+    version=settings.APP_VERSION,
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
 )
 
-# ------------------------------------------------------------------------------
-# Static Files and Templates Configuration
-# ------------------------------------------------------------------------------
-# Mount the static files directory for serving CSS, JS, and images
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Set up Jinja2 templates directory for HTML rendering
+# ------------------------------------------------------------------------------
+# CORS Middleware
+# ------------------------------------------------------------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ------------------------------------------------------------------------------
+# Include API Routers
+# ------------------------------------------------------------------------------
+app.include_router(auth_router)
+app.include_router(calculations_router)
+
+
+# ------------------------------------------------------------------------------
+# Static Files and Templates (Optional Web Interface)
+# ------------------------------------------------------------------------------
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 
 # ------------------------------------------------------------------------------
-# Web (HTML) Routes
+# Web Interface Routes (Optional)
 # ------------------------------------------------------------------------------
-# Our web routes use HTML responses with Jinja2 templates
-# These provide a user-friendly web interface alongside the API
-
-@app.get("/", response_class=HTMLResponse, tags=["web"])
-def read_index(request: Request):
-    """
-    Landing page.
-    
-    Displays the welcome page with links to register and login.
-    """
+@app.get("/", response_class=HTMLResponse, tags=["Web Interface"])
+def index(request: Request):
+    """Landing page with API information."""
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/login", response_class=HTMLResponse, tags=["web"])
+
+@app.get("/login", response_class=HTMLResponse, tags=["Web Interface"])
 def login_page(request: Request):
-    """
-    Login page.
-    
-    Displays a form for users to enter credentials and log in.
-    """
+    """Login page."""
     return templates.TemplateResponse("login.html", {"request": request})
 
-@app.get("/register", response_class=HTMLResponse, tags=["web"])
+
+@app.get("/register", response_class=HTMLResponse, tags=["Web Interface"])
 def register_page(request: Request):
-    """
-    Registration page.
-    
-    Displays a form for new users to create an account.
-    """
+    """Registration page."""
     return templates.TemplateResponse("register.html", {"request": request})
 
-@app.get("/dashboard", response_class=HTMLResponse, tags=["web"])
-def dashboard_page(request: Request):
-    """
-    Dashboard page, listing calculations & new calculation form.
-    
-    This is the main interface after login, where users can:
-    - See all their calculations
-    - Create a new calculation
-    - Access links to view/edit/delete calculations
-    
-    JavaScript in this page calls the API endpoints to fetch and display data.
-    """
+
+@app.get("/dashboard", response_class=HTMLResponse, tags=["Web Interface"])
+def dashboard(request: Request):
+    """User dashboard."""
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
-@app.get("/dashboard/view/{calc_id}", response_class=HTMLResponse, tags=["web"])
-def view_calculation_page(request: Request, calc_id: str):
-    """
-    Page for viewing a single calculation (Read).
-    
-    Part of the BREAD (Browse, Read, Edit, Add, Delete) pattern:
-    - This is the Read page
-    
-    Args:
-        request: The FastAPI request object (required by Jinja2)
-        calc_id: UUID of the calculation to view
-        
-    Returns:
-        HTMLResponse: Rendered template with calculation ID passed to frontend
-    """
-    return templates.TemplateResponse("view_calculation.html", {"request": request, "calc_id": calc_id})
 
-@app.get("/dashboard/edit/{calc_id}", response_class=HTMLResponse, tags=["web"])
-def edit_calculation_page(request: Request, calc_id: str):
-    """
-    Page for editing a calculation (Update).
-    
-    Part of the BREAD (Browse, Read, Edit, Add, Delete) pattern:
-    - This is the Edit page
-    
-    Args:
-        request: The FastAPI request object (required by Jinja2)
-        calc_id: UUID of the calculation to edit
-        
-    Returns:
-        HTMLResponse: Rendered template with calculation ID passed to frontend
-    """
-    return templates.TemplateResponse("edit_calculation.html", {"request": request, "calc_id": calc_id})
+@app.get("/dashboard/view/{calc_id}", response_class=HTMLResponse, tags=["Web Interface"])
+def view_calculation(request: Request, calc_id: str):
+    """View calculation page."""
+    return templates.TemplateResponse("view_calculation.html", 
+                                     {"request": request, "calc_id": calc_id})
+
+
+@app.get("/dashboard/edit/{calc_id}", response_class=HTMLResponse, tags=["Web Interface"])
+def edit_calculation(request: Request, calc_id: str):
+    """Edit calculation page."""
+    return templates.TemplateResponse("edit_calculation.html", 
+                                     {"request": request, "calc_id": calc_id})
 
 
 # ------------------------------------------------------------------------------
-# Health Endpoint
+# Health Check Endpoint
 # ------------------------------------------------------------------------------
-@app.get("/health", tags=["health"])
-def read_health():
-    """Health check."""
-    return {"status": "ok"}
-
-
-# ------------------------------------------------------------------------------
-# User Registration Endpoint
-# ------------------------------------------------------------------------------
-@app.post(
-    "/auth/register", 
-    response_model=UserResponse, 
-    status_code=status.HTTP_201_CREATED,
-    tags=["auth"]
-)
-def register(user_create: UserCreate, db: Session = Depends(get_db)):
+@app.get("/health", tags=["System"])
+def health_check():
     """
-    Create a new user account.
+    Health check endpoint for monitoring.
     """
-    user_data = user_create.dict(exclude={"confirm_password"})
-    try:
-        user = User.register(db, user_data)
-        db.commit()
-        db.refresh(user)
-        return user
-    except ValueError as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-
-# ------------------------------------------------------------------------------
-# User Login Endpoints
-# ------------------------------------------------------------------------------
-@app.post("/auth/login", response_model=TokenResponse, tags=["auth"])
-def login_json(user_login: UserLogin, db: Session = Depends(get_db)):
-    """
-    Login with JSON payload (username & password).
-    Returns an access token, refresh token, and user info.
-    """
-    auth_result = User.authenticate(db, user_login.username, user_login.password)
-    if auth_result is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    user = auth_result["user"]
-    db.commit()  # commit the last_login update
-
-    # Ensure expires_at is timezone-aware
-    expires_at = auth_result.get("expires_at")
-    if expires_at and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    else:
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-
-    return TokenResponse(
-        access_token=auth_result["access_token"],
-        refresh_token=auth_result["refresh_token"],
-        token_type="bearer",
-        expires_at=expires_at,
-        user_id=user.id,
-        username=user.username,
-        email=user.email,
-        first_name=user.first_name,
-        last_name=user.last_name,
-        is_active=user.is_active,
-        is_verified=user.is_verified
-    )
-
-@app.post("/auth/token", tags=["auth"])
-def login_form(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    """
-    Login with form data (Swagger/UI).
-    Returns an access token.
-    """
-    auth_result = User.authenticate(db, form_data.username, form_data.password)
-    if auth_result is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
     return {
-        "access_token": auth_result["access_token"],
-        "token_type": "bearer"
+        "status": "healthy",
+        "service": settings.APP_NAME,
+        "version": settings.APP_VERSION
     }
 
 
 # ------------------------------------------------------------------------------
-# Calculations Endpoints (BREAD)
+# API Documentation
 # ------------------------------------------------------------------------------
-# Create (Add) Calculation
-@app.post(
-    "/calculations",
-    response_model=CalculationResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["calculations"],
-)
-def create_calculation(
-    calculation_data: CalculationBase,
-    current_user = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
+@app.get("/api", tags=["System"])
+def api_info():
     """
-    Create a new calculation for the authenticated user.
-    Automatically computes the 'result'.
+    API information and quick start guide.
     """
-    try:
-        new_calculation = Calculation.create(
-            calculation_type=calculation_data.type,
-            user_id=current_user.id,
-            inputs=calculation_data.inputs,
-        )
-        new_calculation.result = new_calculation.get_result()
-
-        db.add(new_calculation)
-        db.commit()
-        db.refresh(new_calculation)
-        return new_calculation
-
-    except ValueError as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-
-
-# Browse / List Calculations
-@app.get("/calculations", response_model=List[CalculationResponse], tags=["calculations"])
-def list_calculations(
-    current_user = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """
-    List all calculations belonging to the current authenticated user.
-    """
-    calculations = db.query(Calculation).filter(Calculation.user_id == current_user.id).all()
-    return calculations
-
-
-# Read / Retrieve a Specific Calculation by ID
-@app.get("/calculations/{calc_id}", response_model=CalculationResponse, tags=["calculations"])
-def get_calculation(
-    calc_id: str,
-    current_user = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Retrieve a single calculation by its UUID, if it belongs to the current user.
-    """
-    try:
-        calc_uuid = UUID(calc_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid calculation id format.")
-
-    calculation = db.query(Calculation).filter(
-        Calculation.id == calc_uuid,
-        Calculation.user_id == current_user.id
-    ).first()
-    if not calculation:
-        raise HTTPException(status_code=404, detail="Calculation not found.")
-
-    return calculation
-
-
-# Edit / Update a Calculation
-@app.put("/calculations/{calc_id}", response_model=CalculationResponse, tags=["calculations"])
-def update_calculation(
-    calc_id: str,
-    calculation_update: CalculationUpdate,
-    current_user = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Update the inputs (and thus the result) of a specific calculation.
-    """
-    try:
-        calc_uuid = UUID(calc_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid calculation id format.")
-
-    calculation = db.query(Calculation).filter(
-        Calculation.id == calc_uuid,
-        Calculation.user_id == current_user.id
-    ).first()
-    if not calculation:
-        raise HTTPException(status_code=404, detail="Calculation not found.")
-
-    if calculation_update.inputs is not None:
-        calculation.inputs = calculation_update.inputs
-        calculation.result = calculation.get_result()
-
-    calculation.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(calculation)
-    return calculation
-
-
-# Delete a Calculation
-@app.delete("/calculations/{calc_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["calculations"])
-def delete_calculation(
-    calc_id: str,
-    current_user = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Delete a calculation by its UUID, if it belongs to the current user.
-    """
-    try:
-        calc_uuid = UUID(calc_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid calculation id format.")
-
-    calculation = db.query(Calculation).filter(
-        Calculation.id == calc_uuid,
-        Calculation.user_id == current_user.id
-    ).first()
-    if not calculation:
-        raise HTTPException(status_code=404, detail="Calculation not found.")
-
-    db.delete(calculation)
-    db.commit()
-    return None
+    return {
+        "name": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "description": "Professional REST API with JWT Authentication and Email Verification",
+        "documentation": {
+            "swagger": "/docs",
+            "redoc": "/redoc",
+            "openapi": "/openapi.json"
+        },
+        "endpoints": {
+            "authentication": {
+                "register": "POST /api/auth/register",
+                "verify_email": "GET /api/auth/verify-email?token=TOKEN",
+                "login": "POST /api/auth/login",
+                "refresh": "POST /api/auth/refresh",
+                "forgot_password": "POST /api/auth/forgot-password",
+                "reset_password": "POST /api/auth/reset-password",
+                "me": "GET /api/auth/me"
+            },
+            "calculations": {
+                "create": "POST /api/calculations",
+                "list": "GET /api/calculations",
+                "get": "GET /api/calculations/{id}",
+                "update": "PUT /api/calculations/{id}",
+                "delete": "DELETE /api/calculations/{id}",
+                "stats": "GET /api/calculations/stats/summary"
+            }
+        },
+        "features": [
+            "JWT Authentication",
+            "Email Verification",
+            "Password Reset",
+            "BREAD Operations",
+            "User Statistics",
+            "Secure Password Hashing"
+        ]
+    }
 
 
 # ------------------------------------------------------------------------------
